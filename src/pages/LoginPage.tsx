@@ -76,14 +76,14 @@ export default function LoginPage() {
           </Button>
         </form>
 
-        <div className="mt-6 space-y-1 rounded-lg bg-[var(--surface-2)] p-3 text-xs text-[var(--text-muted)]">
+        {/* <div className="mt-6 space-y-1 rounded-lg bg-[var(--surface-2)] p-3 text-xs text-[var(--text-muted)]">
           <p>
             <strong>Admin:</strong> admin@wahba.local / Admin123!
           </p>
           <p>
             <strong>Sub-admin:</strong> subadmin@wahba.local / Viewer123!
           </p>
-        </div>
+        </div> */}
       </div>
     </div>
   )
