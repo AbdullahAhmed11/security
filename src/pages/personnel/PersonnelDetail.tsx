@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useData } from '../../context/DataContext'
+import { useGetPersonByIdQuery } from '../../store/personnelApi'
 import { Badge, Card, EmptyState, PageHeader } from '../../components/ui/Misc'
 import { Table, Td } from '../../components/ui/Table'
 import { Button } from '../../components/ui/Button'
@@ -17,28 +18,41 @@ const leaveStatusLabel: Record<string, string> = {
 
 export default function PersonnelDetail() {
   const { id } = useParams()
-  const { getPerson, data } = useData()
-  const person = id ? getPerson(id) : undefined
+  const { data: appData } = useData()
+  const {
+    data: person,
+    isLoading,
+    isError,
+  } = useGetPersonByIdQuery(id!, { skip: !id })
   const [tab, setTab] = useState<Tab>('leaves')
 
   const leaves = useMemo(
-    () => data.leaves.filter((l) => l.personId === id),
-    [data.leaves, id],
+    () => appData.leaves.filter((l) => l.personId === id),
+    [appData.leaves, id],
   )
   const duties = useMemo(
-    () => data.duties.filter((d) => d.personId === id),
-    [data.duties, id],
+    () => appData.duties.filter((d) => d.personId === id),
+    [appData.duties, id],
   )
   const excellence = useMemo(
-    () => data.excellence.filter((e) => e.personId === id),
-    [data.excellence, id],
+    () => appData.excellence.filter((e) => e.personId === id),
+    [appData.excellence, id],
   )
   const documents = useMemo(
-    () => data.documents.filter((d) => d.personId === id),
-    [data.documents, id],
+    () => appData.documents.filter((d) => d.personId === id),
+    [appData.documents, id],
   )
 
-  if (!person) {
+  if (isLoading) {
+    return (
+      <div>
+        <PageHeader title="ملف الفرد" />
+        <EmptyState message="جاري تحميل الملف..." />
+      </div>
+    )
+  }
+
+  if (isError || !person) {
     return (
       <div>
         <PageHeader title="ملف الفرد" />

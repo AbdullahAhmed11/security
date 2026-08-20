@@ -1,11 +1,19 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useData } from '../context/DataContext'
 import type { LeaveReturnStatus } from '../types'
+import { useAuth } from '../context/AuthContext'
+import {
+  useCreateLeaveMutation,
+  useDeleteLeaveMutation,
+  useGetLeavesQuery,
+  useReturnLeaveMutation,
+  useSeedLeavesMutation,
+} from '../store/leavesApi'
+import { useGetPersonnelQuery } from '../store/personnelApi'
 import { Button } from '../components/ui/Button'
 import { Field, Input, Select, Textarea } from '../components/ui/Field'
 import { Modal } from '../components/ui/Modal'
-import { Badge, PageHeader } from '../components/ui/Misc'
+import { Badge, EmptyState, PageHeader } from '../components/ui/Misc'
 import { Table, Td } from '../components/ui/Table'
 
 function addDays(dateStr: string, days: number) {
@@ -23,7 +31,14 @@ const statusLabel: Record<LeaveReturnStatus, string> = {
 }
 
 export default function LeavesPage() {
-  const { data, getPerson, addLeave, returnFromLeave } = useData()
+  const { canWrite } = useAuth()
+  const { data: people = [] } = useGetPersonnelQuery()
+  const { data: leaves = [], isLoading, isError, refetch } = useGetLeavesQuery()
+  const [createLeave, { isLoading: isCreating }] = useCreateLeaveMutation()
+  const [returnLeave, { isLoading: isReturning }] = useReturnLeaveMutation()
+  const [deleteLeave, { isLoading: isDeleting }] = useDeleteLeaveMutation()
+  const [seedLeaves, { isLoading: isSeeding }] = useSeedLeavesMutation()
+
   const [openDepart, setOpenDepart] = useState(false)
   const [openReturn, setOpenReturn] = useState(false)
   const [returnLeaveId, setReturnLeaveId] = useState<string | null>(null)
@@ -42,15 +57,20 @@ export default function LeavesPage() {
     notes: '',
   })
 
-  const rows = useMemo(
-    () =>
-      [...data.leaves].sort((a, b) =>
-        b.departureDate.localeCompare(a.departureDate),
-      ),
-    [data.leaves],
+  const peopleById = useMemo(
+    () => new Map(people.map((p) => [p.id, p])),
+    [people],
   )
 
-  function saveDepart() {
+  const rows = useMemo(
+    () =>
+      [...leaves].sort((a, b) =>
+        b.departureDate.localeCompare(a.departureDate),
+      ),
+    [leaves],
+  )
+
+  async function saveDepart() {
     if (!departForm.personId) {
       alert('اختر الفرد')
       return
@@ -59,21 +79,29 @@ export default function LeavesPage() {
       departForm.departureDate,
       departForm.durationDays,
     )
-    addLeave({
-      personId: departForm.personId,
-      batch: departForm.batch,
-      departureDate: departForm.departureDate,
-      durationDays: departForm.durationDays,
-      expectedReturnDate,
-      actualReturnDate: '',
-      returnStatus: 'pending',
-      notes: departForm.notes,
-    })
-    setOpenDepart(false)
+    try {
+      await createLeave({
+        personId: departForm.personId,
+        batch: departForm.batch,
+        departureDate: departForm.departureDate,
+        durationDays: departForm.durationDays,
+        expectedReturnDate,
+        actualReturnDate: '',
+        returnStatus: 'pending',
+        notes: departForm.notes,
+      }).unwrap()
+      setOpenDepart(false)
+    } catch (err) {
+      const message =
+        err && typeof err === 'object' && 'data' in err
+          ? String((err as { data?: { message?: string } }).data?.message ?? '')
+          : ''
+      alert(message || 'تعذر تسجيل الإجازة')
+    }
   }
 
   function openReturnModal(leaveId: string) {
-    const leave = data.leaves.find((l) => l.id === leaveId)
+    const leave = leaves.find((l) => l.id === leaveId)
     setReturnLeaveId(leaveId)
     setReturnForm({
       actualReturnDate: new Date().toISOString().slice(0, 10),
@@ -83,10 +111,32 @@ export default function LeavesPage() {
     setOpenReturn(true)
   }
 
-  function saveReturn() {
+  async function saveReturn() {
     if (!returnLeaveId) return
-    returnFromLeave(returnLeaveId, returnForm)
-    setOpenReturn(false)
+    try {
+      await returnLeave({ id: returnLeaveId, ...returnForm }).unwrap()
+      setOpenReturn(false)
+    } catch {
+      alert('تعذر تسجيل العودة')
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm('حذف سجل الإجازة؟')) return
+    try {
+      await deleteLeave(id).unwrap()
+    } catch {
+      alert('تعذر حذف الإجازة')
+    }
+  }
+
+  async function handleSeed() {
+    try {
+      const result = await seedLeaves().unwrap()
+      alert(result.message)
+    } catch {
+      alert('تعذر إدخال البيانات التجريبية')
+    }
   }
 
   return (
@@ -95,84 +145,137 @@ export default function LeavesPage() {
         title="الإجازات والدفعات"
         description="21 يوم خدمة ← 7 أو 8 أيام إجازة — كل حركة تُحفظ في سجل مستقل"
         actions={
-          <Button
-            onClick={() => {
-              setDepartForm({
-                personId: data.people[0]?.id ?? '',
-                batch: 'دفعة أ',
-                departureDate: new Date().toISOString().slice(0, 10),
-                durationDays: 7,
-                notes: '',
-              })
-              setOpenDepart(true)
-            }}
-          >
-            تسجيل نزول إجازة
-          </Button>
+          <>
+            {canWrite && leaves.length === 0 && !isLoading && (
+              <Button
+                variant="secondary"
+                onClick={handleSeed}
+                disabled={isSeeding || people.length === 0}
+              >
+                {isSeeding ? 'جاري الإدخال...' : 'بيانات تجريبية'}
+              </Button>
+            )}
+            {canWrite && (
+              <Button
+                onClick={() => {
+                  setDepartForm({
+                    personId: people[0]?.id ?? '',
+                    batch: 'دفعة أ',
+                    departureDate: new Date().toISOString().slice(0, 10),
+                    durationDays: 7,
+                    notes: '',
+                  })
+                  setOpenDepart(true)
+                }}
+                disabled={people.length === 0}
+              >
+                تسجيل نزول إجازة
+              </Button>
+            )}
+          </>
         }
       />
 
-      <Table
-        headers={[
-          'الفرد',
-          'الدفعة',
-          'النزول',
-          'المدة',
-          'العودة المتوقعة',
-          'العودة الفعلية',
-          'الحالة',
-          'ملاحظات',
-          'إجراء',
-        ]}
-      >
-        {rows.map((l) => {
-          const person = getPerson(l.personId)
-          return (
-            <tr key={l.id}>
-              <Td>
-                {person ? (
-                  <Link
-                    to={`/personnel/${person.id}`}
-                    className="text-[var(--accent)] hover:underline"
+      {isLoading && <EmptyState message="جاري تحميل الإجازات..." />}
+
+      {isError && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <p className="mb-3">تعذر تحميل الإجازات من الخادم</p>
+          <Button variant="secondary" onClick={() => refetch()}>
+            إعادة المحاولة
+          </Button>
+        </div>
+      )}
+
+      {!isLoading && !isError && rows.length === 0 && (
+        <EmptyState message="لا توجد إجازات — سجّل نزول إجازة أو استخدم البيانات التجريبية" />
+      )}
+
+      {!isLoading && !isError && rows.length > 0 && (
+        <Table
+          headers={[
+            'الفرد',
+            'الدفعة',
+            'النزول',
+            'المدة',
+            'العودة المتوقعة',
+            'العودة الفعلية',
+            'الحالة',
+            'ملاحظات',
+            'إجراء',
+          ]}
+        >
+          {rows.map((l) => {
+            const person = peopleById.get(l.personId)
+            return (
+              <tr key={l.id}>
+                <Td>
+                  {person ? (
+                    <Link
+                      to={`/personnel/${person.id}`}
+                      className="text-[var(--accent)] hover:underline"
+                    >
+                      {person.name}
+                    </Link>
+                  ) : (
+                    '—'
+                  )}
+                </Td>
+                <Td>{l.batch}</Td>
+                <Td>{l.departureDate}</Td>
+                <Td>{l.durationDays} يوم</Td>
+                <Td>{l.expectedReturnDate}</Td>
+                <Td>{l.actualReturnDate || '—'}</Td>
+                <Td>
+                  <Badge
+                    tone={
+                      l.returnStatus === 'pending'
+                        ? 'warning'
+                        : l.returnStatus === 'on_time'
+                          ? 'success'
+                          : 'info'
+                    }
                   >
-                    {person.name}
-                  </Link>
-                ) : (
-                  '—'
-                )}
-              </Td>
-              <Td>{l.batch}</Td>
-              <Td>{l.departureDate}</Td>
-              <Td>{l.durationDays} يوم</Td>
-              <Td>{l.expectedReturnDate}</Td>
-              <Td>{l.actualReturnDate || '—'}</Td>
-              <Td>
-                <Badge
-                  tone={
-                    l.returnStatus === 'pending'
-                      ? 'warning'
-                      : l.returnStatus === 'on_time'
-                        ? 'success'
-                        : 'info'
-                  }
-                >
-                  {statusLabel[l.returnStatus]}
-                </Badge>
-              </Td>
-              <Td className="max-w-40 truncate">{l.notes || '—'}</Td>
-              <Td>
-                {l.returnStatus === 'pending' ? (
-                  <Button variant="secondary" onClick={() => openReturnModal(l.id)}>
-                    تسجيل عودة
-                  </Button>
-                ) : (
-                  <span className="text-xs text-[var(--text-muted)]">محفوظة</span>
-                )}
-              </Td>
-            </tr>
-          )
-        })}
-      </Table>
+                    {statusLabel[l.returnStatus]}
+                  </Badge>
+                </Td>
+                <Td className="max-w-40 truncate">{l.notes || '—'}</Td>
+                <Td>
+                  <div className="flex flex-wrap gap-2">
+                    {l.returnStatus === 'pending' ? (
+                      canWrite ? (
+                        <Button
+                          variant="secondary"
+                          onClick={() => openReturnModal(l.id)}
+                        >
+                          تسجيل عودة
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-[var(--text-muted)]">
+                          بانتظار العودة
+                        </span>
+                      )
+                    ) : (
+                      <span className="text-xs text-[var(--text-muted)]">
+                        محفوظة
+                      </span>
+                    )}
+                    {canWrite && (
+                      <Button
+                        variant="danger"
+                        onClick={() => handleDelete(l.id)}
+                        disabled={isDeleting}
+                      >
+                        حذف
+                      </Button>
+                    )}
+                  </div>
+                </Td>
+              </tr>
+            )
+          })}
+        </Table>
+      )}
 
       <Modal
         open={openDepart}
@@ -183,7 +286,9 @@ export default function LeavesPage() {
             <Button variant="secondary" onClick={() => setOpenDepart(false)}>
               إلغاء
             </Button>
-            <Button onClick={saveDepart}>حفظ</Button>
+            <Button onClick={saveDepart} disabled={isCreating}>
+              {isCreating ? 'جاري الحفظ...' : 'حفظ'}
+            </Button>
           </>
         }
       >
@@ -195,7 +300,7 @@ export default function LeavesPage() {
                 setDepartForm({ ...departForm, personId: e.target.value })
               }
             >
-              {data.people.map((p) => (
+              {people.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name} ({p.number})
                 </option>
@@ -255,7 +360,9 @@ export default function LeavesPage() {
             <Button variant="secondary" onClick={() => setOpenReturn(false)}>
               إلغاء
             </Button>
-            <Button onClick={saveReturn}>حفظ العودة</Button>
+            <Button onClick={saveReturn} disabled={isReturning}>
+              {isReturning ? 'جاري الحفظ...' : 'حفظ العودة'}
+            </Button>
           </>
         }
       >
